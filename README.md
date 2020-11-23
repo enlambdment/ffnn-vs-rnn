@@ -1,5 +1,7 @@
 # ffnn-vs-rnn
 
+TODO: Fix the hand-written `softmax'` implementation, which is incorrect
+
 Adaptation of the [untyped neural network implementation](https://blog.jle.im/entry/practical-dependent-types-in-haskell-1.html) 
 at the start of Justin Le's blog series on dependent types for machine learning.
 
