@@ -39,13 +39,13 @@ data RNN i h o = MkRNN {
   , getV    :: !(Weights h o)
   }
 
--- A stretch goal would be to parametrize 
--- the activation functions into the 
--- construction of an RNN somehow, but 
--- not clear if this is advisable.
+-- If one were to leverage a.g. ad the Hackage library for 
+-- autodifferentiable functions, then functions being used for
+-- activation could be provided in a symbolic form amenable to
+-- being automatically differentiated (for use in the backprop
+-- process.) Instead, each activation function used & its derivative
+-- are provided separately.
 
--- Instead, use logistic 
--- (and maybe softmax)
 logistic :: Floating a => a -> a
 logistic x = 1 / (1 + exp (-x))
 
@@ -65,6 +65,9 @@ softmax v =
 -- softmax'[x, y] = -softmax[x]    * softmax[y],    x /= y
 --                  (1-softmax[x]) * softmax[y],    x == y
 --
+-- which is the same as adding the vector 
+-- 'softmax v' diagonally down the negative of 
+-- said vector's outer product with itself.
 -- I would prefer to build this using 'build', but 
 -- I don't know how right now.
 softmax' :: KnownNat v => R v -> L v v 
@@ -121,7 +124,7 @@ runRNN_verbose (MkRNN rnn_U rnn_W rnn_V)
         -- output parameters, weighting the current hidden state
         z_t = runLayer rnn_V h_t 
         -- the final activation provides the prediction 
-        y_t = softmax z_t 
+        y_t = logistic z_t 
     in  (x_t, h_t_1, h_t, z_t, y_t)  
 
 -- Forward phase of training an RNN.
@@ -221,6 +224,7 @@ backward_phase rnn intermediates dh_n_dh_n' rate =
                   desired training rate to the scalar input param 'rate'.
                 -}
             let dedz          = logistic' z_t * (y_t - tgt_t)
+                              -- = softmax' z_t #> (y_t - tgt_t)
 
                 {-
                   Informally:
@@ -373,7 +377,7 @@ biarithmetic    s      m      n   =  concat $
 
 -- For use as a multiple of 20
 genStartParam :: MonadRandom m => m Int 
-genStartParam = getRandomR (1, 10)
+genStartParam = getRandomR (3, 10)
 
 -- For use as a mid-sequence length 
 genMiddleLenParam :: MonadRandom m => m Int 
@@ -394,7 +398,7 @@ genFinishParam = getRandomR (1, 10)
 -- Bump this and / or genMiddleLenParam up once I'm confident the BPTT terminates 
 -- on smaller sizes.
 genSentenceCount :: MonadRandom m => m Int 
-genSentenceCount = getRandomR (10, 20)
+genSentenceCount = getRandomR (500, 1000)
 
 type Sentence = [Int]
 
@@ -447,6 +451,24 @@ intToVector m =
       doubles_vect  = Numeric.LinearAlgebra.Static.fromList doubles_list
   in  doubles_vect
 
+-- The other way round, for casting RNN predictions back into Int's.
+-- This is unsafe in case the entries of any y_t end up rounding to
+-- numbers other than 0, 1.
+-- (Does the hmatrix API support a more direct way of casting from
+-- R 10 to the list of rounded numbers?)
+vectorToInt :: R 10 -> Int 
+vectorToInt v = 
+  let bins = (fmap toInteger) <$> LA.toList 
+                                $ LA.toZ 
+                                $ LA.roundVector 
+                                $ extract v 
+  in  fromIntegral $ 
+        foldr (\p@(bit,  power)  total -> 
+                   bit * power + total) 
+        0
+        (zip bins [ 2^j | j <- [0..] ])
+
+
 -- TODO:  1. function to create zeroes vector of a given input dimension
 --        2. random generation of Weights
 --        3. random generation of RNN
@@ -488,8 +510,108 @@ trainRNN rnn train_data rate =
       trained       = backward_phase rnn intermediates zero_vec rate
   in  trained
 
+-- Before re-formatting into a vector form suitable for use 
+-- in training, we have Document ~ [Sentence] ~ [[Int]];
+-- now, turn each Int into a binary-repr vector, R 10
+genSampleData :: MonadRandom m => m [[ R 10 ]]
+genSampleData = do 
+  doc <- genDocument 
+  return $ (intToVector <$>) <$> doc
 
+-- Every sentence (sublist) in the document (list of lists) will
+-- furnish one sequence of training data for the RNN to "unfold"
+-- over and perform BPTT on. So, BPTT is performed once per sentence
+-- in the document overall.
+pairEachWithNext :: [x] -> [(x, x)]
+pairEachWithNext xs = 
+  zip (init xs) (tail xs)
 
+-- In the special case of an 'RNN i h o' where o = i,
+-- we can pipe back a prediction y_t due to x_t and an
+-- initial state h, to furnish the next x_(t+1) for further
+-- predictions. We'll use this to observe the way that a
+-- trained RNN behaves.
+rnnStep :: (KnownNat i, KnownNat h) 
+        => RNN i h i
+        -> (R h, R i)
+        -> (R h, R i)
+rnnStep rnn (h_t_1, x_t) = 
+  let full_output = runRNN_verbose rnn x_t h_t_1 
+      third five@(_, _, x3, _, _)  = x3 
+      fifth five@(_, _, _,  _, x5) = x5 
+  in  (third full_output, fifth full_output)
 
+-- Randomly generate an RNN & some document data to train
+-- it on, performing the training & giving back the trained
+-- RNN within IO.
 
+getRnnIO :: IO (RNN 10 300 10)
+getRnnIO = evalRandIO randomRNN 
 
+{-
+ e.g.
+
+ getRnnIO >>= 
+  (\rnn -> return $ vectorToInt <$> takePredsFromN rnn 20 5)
+-}
+
+getDocumentIO :: IO Document 
+getDocumentIO = evalRandIO genDocument
+
+takePredictions  :: (KnownNat i, KnownNat h) 
+                 => RNN i h i
+                 -> (R h, R i)
+                 -> Int 
+                 -> [R i]
+takePredictions rnn (h_0, x_1) n = 
+  let hxs_stream = take (n+1) $ iterate (rnnStep rnn) (h_0, x_1)
+  in  snd <$> hxs_stream
+
+takePredsFromN :: KnownNat h
+               => RNN 10 h 10
+               -> Int      -- word of a sentence
+               -> Int      -- number of predictions
+               -> [R 10]
+takePredsFromN rnn x_1 n = 
+  takePredictions rnn (zero_vec, intToVector x_1) n
+
+f x_1 n = 
+  pure takePredictions  <*> getRnnIO 
+                        <*> pure (zero_vec, intToVector x_1)
+                        <*> pure n 
+
+g x_1 n =
+  (vectorToInt <$>) <$> f x_1 n
+
+trainRNNOnSentence  :: KnownNat h
+                    => RNN 10 h 10 
+                    -> Sentence
+                    -> Double 
+                    -> RNN 10 h 10 
+trainRNNOnSentence rnn sent rate = 
+  let training_data = pairEachWithNext (intToVector <$> sent)
+  in  trainRNN rnn training_data rate 
+
+-- trainRNNOnDocument has to be structured like a fold
+-- so that the trained RNN due to each sentence can be 
+-- passed to the following sentence (at the same time,
+-- I think that hidden state "restarts" with the beginning
+-- of a new sentence.)
+trainRNNOnDocument  :: KnownNat h
+                    => RNN 10 h 10 
+                    -> Document 
+                    -> Double 
+                    -> RNN 10 h 10 
+trainRNNOnDocument rnn sents rate = 
+  foldl (\rnn sent -> trainRNNOnSentence rnn sent rate)
+        rnn 
+        sents
+
+h = pure trainRNNOnDocument <*> getRnnIO
+                            <*> getDocumentIO
+                            <*> pure 0.20
+{-
+  e.g.
+  h >>= 
+    (\rnn -> return $ vectorToInt <$> takePredsFromN rnn 20 50)
+-}

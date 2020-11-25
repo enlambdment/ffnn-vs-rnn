@@ -447,9 +447,11 @@ softmax v =
   let vexp = exp v :: Vector Double
   in  vexp / (scalar $ sumElements vexp)
 
--- Differentiation leaves (\x -> exp x) unchanged 
-softmax' :: Vector Double -> Vector Double 
-softmax' = softmax
+-- Note that the derivative of (vector) softmax is matrix-valued
+softmax' :: Vector Double -> Matrix Double 
+softmax' v = 
+  let s = softmax v 
+  in  diag s - s `outer` s
 
 runRNN_softmax :: RNN 
                -> Vector Double -- input vector
