@@ -486,7 +486,7 @@ trainRNN_softmax rnn@(MkRNN
       h_t   = logistic z_u        
       z_h   = (vB + vN #> h_t)     
       y_t   = softmax z_h                   -- <-     
-      dEdz  = softmax' z_h * (y_t - tgt_t)  -- <- 
+      dEdz  = softmax' z_h #> (y_t - tgt_t)  -- <- 
       vB'   = vB - scale rate dEdz
       vN'   = vN + ((- scale rate dEdz) `outer` h_t)
       dh_t  = tr vN #> dEdz 

@@ -23,3 +23,10 @@ See also this [blog post](http://www.wildml.com/2015/10/recurrent-neural-network
 -- RNN on indirectly encoded numerals; sample inputs / outputs are one-hot 3-by-1 vectors
 > displayRNNTraining_softmax 0.25 rnn_training_data_onehot
 ```
+
+(11/25/2020) The `BPTT` module via `src/` now contains an implementation, from scratch, of back-propagation through time (BPTT)
+along with a discussion, in-line with the code of `backward_phase`, of how each quantity adjusting the parameters and propagating
+error attribution to the prior hidden state, from the current time, is derived.
+
+For demoing the behavior of these simple RNNs in general, `observeUntrainedPredictions`, `observeTrainedPredictions` and 
+`observeUntrainedVsTrained` are defined in `BPTT` module.

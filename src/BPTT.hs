@@ -84,26 +84,6 @@ runLayer :: (KnownNat i, KnownNat o)
 runLayer (W wB wN) v_in = 
   wB + wN #> v_in
 
-  
-
--- -- GIVEN: rnn                    :: RNN i h o
--- --        current input vector   :: R i 
--- --        prior hidden state     :: R h
--- -- GIVES: current prediction     :: R o
--- --        *and* new hidden state :: R h
--- runRNN :: (KnownNat i, KnownNat h, KnownNat o)
---        => RNN i h o
---        -> R i -> R h 
---        -> (R o, R h)
--- runRNN (MkRNN rnn_U rnn_W rnn_V) 
---   x_t h_t_1 = 
---     let h_t = logistic $ 
---                 (runLayer rnn_W h_t_1) + 
---                 (runLayer rnn_U x_t)
---         z_t = runLayer rnn_V h_t 
---         y_t = logistic z_t 
---     in  (y_t, h_t)
-
 -- Verbose 'run RNN', for exposing all intermediate computations.
 -- (R i, R h,  R h, R o, R o)
 --  x_t  h_t-1 h_t  z_t  y_t    
@@ -343,16 +323,6 @@ backward_phase rnn intermediates dh_n_dh_n' rate =
                                     (W wB' wN') 
                                     (W vB' vN')) 
 
-
--- IDEAS:
--- 1. NEWTYPES, for working "mathematical 
---    variable naming conventions" into the 
---    code: aids human-readability
--- 2. DEPENDENT TYPES, so that the types 
---    of the training data / intermediate results
---    / network parameters being passed around 
---    carry information about their dimensions
-
 {-
  Making some simple training data. 
 
@@ -395,8 +365,6 @@ genFinishParam :: MonadRandom m => m Int
 genFinishParam = getRandomR (1, 10)
 
 -- For use as a number of "sentences".
--- Bump this and / or genMiddleLenParam up once I'm confident the BPTT terminates 
--- on smaller sizes.
 genSentenceCount :: MonadRandom m => m Int 
 genSentenceCount = getRandomR (500, 1000)
 
@@ -425,7 +393,9 @@ genDocument :: MonadRandom m => m Document
 genDocument = do
   -- 1. Get number of sentences
   sent_count <- genSentenceCount
-  -- 2. For as many sentences as 'sent_count', 
+  -- 2. For as many sentences as 'sent_count', generate one 
+  --    random sentence each & then combine the results inside
+  --    MonadRandom context
   let rand_sent_stream = repeat genSentence
   sentences <- sequenceA $ take sent_count rand_sent_stream
   return sentences 
@@ -437,12 +407,11 @@ genDocument = do
   Convert each integer to a (possibly sparse) vector. How? 
   Every integer present in a (d :: Document) should always lie
   within the range (0 <= j <= 256), so we could use a binary representation
-  taking up 8 bits (or tossing in an extra to get 9, for good measure)
+  taking up 8 bits (tossing in an extra 2 to get 10, for good measure)
 -}
 
 -- The full source module citation is probably forgivable if I only do it this once.
--- Best practice is to 'import qualified' with an alias ...
-intToVector :: Int -> R 10 
+-- Best practice is to 'import qualified' with an alias intToVector :: Int -> R 10 
 intToVector m = 
   let binary_string = reverse $ showIntAtBase 2 intToDigit m "" -- :: [Char]
       binary_padded = binary_string ++ 
@@ -467,18 +436,6 @@ vectorToInt v =
                    bit * power + total) 
         0
         (zip bins [ 2^j | j <- [0..] ])
-
-
--- TODO:  1. function to create zeroes vector of a given input dimension
---        2. random generation of Weights
---        3. random generation of RNN
---        4. overall training function that takes a random RNN & Document,
---           then trains
---        5. then, testing function that takes a trained RNN & Document, and
---           assesses performance
---           *or* function that takes a trained RNN & a suitable initial integer,
---           then unfolds a sentences based upon series of predictions
---        6. also put softmax / softmax' in here?
 
 zero_vec :: KnownNat n => R n
 zero_vec = 0
@@ -541,20 +498,6 @@ rnnStep rnn (h_t_1, x_t) =
       fifth five@(_, _, _,  _, x5) = x5 
   in  (third full_output, fifth full_output)
 
--- Randomly generate an RNN & some document data to train
--- it on, performing the training & giving back the trained
--- RNN within IO.
-
-getRnnIO :: IO (RNN 10 300 10)
-getRnnIO = evalRandIO randomRNN 
-
-{-
- e.g.
-
- getRnnIO >>= 
-  (\rnn -> return $ vectorToInt <$> takePredsFromN rnn 20 5)
--}
-
 getDocumentIO :: IO Document 
 getDocumentIO = evalRandIO genDocument
 
@@ -574,14 +517,6 @@ takePredsFromN :: KnownNat h
                -> [R 10]
 takePredsFromN rnn x_1 n = 
   takePredictions rnn (zero_vec, intToVector x_1) n
-
-f x_1 n = 
-  pure takePredictions  <*> getRnnIO 
-                        <*> pure (zero_vec, intToVector x_1)
-                        <*> pure n 
-
-g x_1 n =
-  (vectorToInt <$>) <$> f x_1 n
 
 trainRNNOnSentence  :: KnownNat h
                     => RNN 10 h 10 
@@ -607,11 +542,73 @@ trainRNNOnDocument rnn sents rate =
         rnn 
         sents
 
-h = pure trainRNNOnDocument <*> getRnnIO
-                            <*> getDocumentIO
-                            <*> pure 0.20
-{-
-  e.g.
-  h >>= 
-    (\rnn -> return $ vectorToInt <$> takePredsFromN rnn 20 50)
--}
+observeUntrainedPredictions :: Int    -- initial word
+                            -> Int    -- number of predictions
+                            -> IO ()  -- action printing info to console
+observeUntrainedPredictions n_0 num = do 
+  -- get an RNN of random parameters 
+  putStrLn "Getting a random RNN ..."
+  (rnn :: RNN 10 300 10) <- evalRandIO randomRNN
+  -- get a series of predictions from the untrained RNN
+  putStrLn $ "Producing: " ++ show num ++ 
+             " predictions, starting from: " ++ show n_0
+  let vs = takePredsFromN rnn n_0 num 
+  let ns = vectorToInt <$> vs 
+  putStrLn "The RNN has predicted: "
+  print ns
+
+observeTrainedPredictions :: Int    -- initial word
+                          -> Int    -- number of predictions
+                          -> Double -- learning rate
+                          -> IO ()  -- action printing info to console
+observeTrainedPredictions n_0 num rate = do 
+  -- get an RNN of random parameters 
+  putStrLn "Getting a random RNN ..."
+  (rnn :: RNN 10 300 10) <- evalRandIO randomRNN
+  -- get a random document
+  putStrLn "Getting a random document to train on ..."
+  document <- evalRandIO genDocument
+  -- train RNN on the document
+  putStrLn "Training the RNN on the document ..."
+  let rnn' = trainRNNOnDocument rnn document rate 
+  -- get a series of predictions from the trained RNN
+  putStrLn $ "Producing: " ++ show num ++ 
+             " predictions, starting from: " ++ show n_0 ++
+             " and using a trained RNN"
+  let vs = takePredsFromN rnn' n_0 num 
+  let ns = vectorToInt <$> vs 
+  putStrLn "The trained RNN has predicted: "
+  print ns
+
+observeUntrainedVsTrained :: Int    -- initial word
+                          -> Int    -- number of predictions
+                          -> Double -- learning rate
+                          -> IO ()  -- action printing info to console
+observeUntrainedVsTrained n_0 num rate = do 
+  -- get an RNN of random parameters 
+  putStrLn "Getting a random RNN ..."
+  (rnn :: RNN 10 300 10) <- evalRandIO randomRNN
+  -- get a series of predictions from the untrained RNN
+  putStrLn $ "Producing: " ++ show num ++ 
+             " predictions, starting from: " ++ show n_0
+  let vs = takePredsFromN rnn n_0 num 
+  let ns = vectorToInt <$> vs 
+  putStrLn "The RNN has predicted: "
+  print ns
+  -- get a random document
+  putStrLn "Getting a random document to train on ..."
+  document <- evalRandIO genDocument
+  -- train RNN on the document
+  putStrLn "Training the RNN on the document ..."
+  let rnn' = trainRNNOnDocument rnn document rate 
+  -- get a series of predictions from the trained RNN
+  putStrLn $ "Producing: " ++ show num ++ 
+             " predictions, starting from: " ++ show n_0 ++
+             " and using a trained RNN"
+  let vs' = takePredsFromN rnn' n_0 num 
+  let ns' = vectorToInt <$> vs' 
+  putStrLn "The trained RNN has predicted: "
+  print ns'
+
+
+
