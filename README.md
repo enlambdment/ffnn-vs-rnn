@@ -1,7 +1,5 @@
 # ffnn-vs-rnn
 
-TODO: Fix the hand-written `softmax'` implementation, which is incorrect
-
 Adaptation of the [untyped neural network implementation](https://blog.jle.im/entry/practical-dependent-types-in-haskell-1.html) 
 at the start of Justin Le's blog series on dependent types for machine learning.
 
@@ -30,3 +28,10 @@ error attribution to the prior hidden state, from the current time, is derived.
 
 For demoing the behavior of these simple RNNs in general, `observeUntrainedPredictions`, `observeTrainedPredictions` and 
 `observeUntrainedVsTrained` are defined in `BPTT` module.
+
+## Sources 
+
+The following resources were valuable in helping me form an understanding of backpropagation for neural nets:
+
+* [3Blue1Brown neural networks playlist](https://www.youtube.com/playlist?list=PLZHQObOWTQDNU6R1_67000Dx_ZCJB-3pi)
+ 
